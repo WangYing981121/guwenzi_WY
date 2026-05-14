@@ -1,0 +1,5 @@
+numpy==1.26.4
+paddleocr==2.7.0.3
+opencv-python-headless==4.8.1.78
+scikit-image==0.21.0
+pillow==10.4.0

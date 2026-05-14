@@ -1,0 +1,1 @@
+{"default": {"features": {"image": {"_type": "Value"}}, "splits": {"test": {"name": "test", "dataset_name": "AI_camp_ocr_2026"}}}}
