@@ -37,7 +37,6 @@ RUN set -eux; \
         bash \
         wget \
         ca-certificates \
-        libcublas-12-0 \
         libgomp1 \
         libglib2.0-0 \
         libgl1 \
@@ -45,21 +44,6 @@ RUN set -eux; \
         libxrender1 \
         libxext6; \
     rm -rf /var/lib/apt/lists/*
-
-RUN set -eux; \
-    mkdir -p /usr/local/cuda/lib64; \
-    echo "/usr/local/cuda/lib64" > /etc/ld.so.conf.d/cuda.conf; \
-    for lib in libcublas libcublasLt libcudnn; do \
-        target="$(find -H /usr/local/cuda /usr/local/cuda-* /usr/lib -name "${lib}.so.*" 2>/dev/null | sort -V | tail -n 1 || true)"; \
-        if [ -n "$target" ]; then \
-            ln -sf "$target" "/usr/local/cuda/lib64/${lib}.so"; \
-            echo "Linked /usr/local/cuda/lib64/${lib}.so -> $target"; \
-        else \
-            echo "Missing ${lib}.so.*"; \
-        fi; \
-    done; \
-    ldconfig; \
-    python3 -c "import ctypes; [ctypes.CDLL(x) for x in ('libcublas.so', 'libcublasLt.so', 'libcudnn.so')]; print('CUDA libraries load OK')"
 
 WORKDIR /app
 
@@ -73,18 +57,15 @@ ENV PIP_DEFAULT_TIMEOUT=180 \
 RUN set -eux; \
     python3 -m pip install --upgrade "pip<25" setuptools wheel
 
+# Install PyTorch with CUDA 11.8 support (compatible with CUDA 12.0 runtime)
 RUN set -eux; \
-    python3 -m pip install paddlepaddle-gpu==2.6.1.post120 -f https://www.paddlepaddle.org.cn/whl/linux/cudnnin/stable.html
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
+# Install remaining Python dependencies
 RUN set -eux; \
     python3 -m pip install --prefer-binary -r /app/requirements.txt
 
-RUN set -eux; \
-    python3 -c "import ctypes, ctypes.util, paddle; [ctypes.CDLL(x) for x in ('libcublas.so', 'libcublasLt.so', 'libcudnn.so')]; print('Paddle version:', paddle.__version__); print('cuDNN library:', ctypes.util.find_library('cudnn'))"
-
-COPY src/warmup_models.py /app/src/warmup_models.py
-RUN python3 /app/src/warmup_models.py
-
+# Copy model weights and source code
 COPY src/ /app/src/
 COPY run.sh /app/run.sh
 RUN chmod +x /app/run.sh

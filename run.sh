@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "Starting official PaddleOCR baseline inference..."
+echo "Starting YOLO + EfficientNet inference..."
 
 echo "===== Runtime paths ====="
 echo "PWD=$(pwd)"
