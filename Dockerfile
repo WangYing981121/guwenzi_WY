@@ -70,4 +70,7 @@ COPY src/ /app/src/
 COPY run.sh /app/run.sh
 RUN chmod +x /app/run.sh
 
+# Warm up models at build time (faster container startup)
+RUN python3 /app/src/warmup_models.py || echo "Warmup skipped (expected during cross-platform build)"
+
 ENTRYPOINT ["/usr/bin/tini", "--", "bash", "/app/run.sh"]
