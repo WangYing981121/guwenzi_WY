@@ -1,0 +1,45 @@
+name: Build and Push to ACR
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag"
+        required: true
+        default: "0523-1"
+
+env:
+  ACR_REGISTRY: crpi-394hrttnwuq8e2kw.cn-shanghai.personal.cr.aliyuncs.com
+  ACR_NAMESPACE: guwenzi_wy
+  ACR_IMAGE: guwenzi_wy
+  ACR_TAG: ${{ github.event.inputs.tag || '0523-1' }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USER }}
+          password: ${{ secrets.ACR_PASS }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ env.ACR_IMAGE }}:${{ env.ACR_TAG }}
+          cache-from: type=registry,ref=${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ env.ACR_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ env.ACR_IMAGE }}:buildcache,mode=max

@@ -17,7 +17,7 @@ from PIL import Image
 from ultralytics import YOLO
 
 
-INPUT_DIR = Path(os.getenv("INPUT_DIR", "/saisdata/13/eval/images"))
+INPUT_DIR = Path(os.getenv("INPUT_DIR", "/saisdata"))
 OUTPUT_FILE = Path(os.getenv("OUTPUT_FILE", "/saisresult/prediction.json"))
 YOLO_WEIGHTS = Path(os.getenv("YOLO_WEIGHTS", "/app/src/best.pt"))
 CLS_WEIGHTS = Path(os.getenv("CLS_WEIGHTS", "/app/src/model.pt"))
