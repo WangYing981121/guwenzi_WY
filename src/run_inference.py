@@ -22,7 +22,7 @@ OUTPUT_FILE = Path(os.getenv("OUTPUT_FILE", "/saisresult/prediction.json"))
 YOLO_WEIGHTS = Path(os.getenv("YOLO_WEIGHTS", "/app/src/best.pt"))
 CLS_WEIGHTS = Path(os.getenv("CLS_WEIGHTS", "/app/src/model.pt"))
 ID2CHAR_PATH = Path(os.getenv("ID2CHAR_PATH", "/app/src/ID_to_chinese.json"))
-CONFIDENCE = float(os.getenv("CONFIDENCE", "0.25"))
+CONFIDENCE = float(os.getenv("CONFIDENCE", "0.15"))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -81,13 +81,26 @@ def load_id2char(path):
 def find_images():
     suffixes = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
+    def _collect(path):
+        return sorted(
+            p for p in path.rglob("*") if p.suffix.lower() in suffixes
+        )
+
     if INPUT_DIR.exists():
-        return sorted(path for path in INPUT_DIR.iterdir() if path.suffix.lower() in suffixes)
+        images = _collect(INPUT_DIR)
+        if images:
+            return images
+        print(f"Warning: {INPUT_DIR} exists but no images found, "
+              f"contents: {list(INPUT_DIR.iterdir())}")
 
     fallback_root = Path("/saisdata")
-    if fallback_root.exists():
-        return sorted(path for path in fallback_root.rglob("*") if path.suffix.lower() in suffixes)
+    if fallback_root.exists() and fallback_root != INPUT_DIR:
+        images = _collect(fallback_root)
+        if images:
+            print(f"Fallback: found {len(images)} images in {fallback_root}")
+            return images
 
+    print(f"Error: no images found in {INPUT_DIR} or /saisdata")
     return []
 
 
