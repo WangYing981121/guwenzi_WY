@@ -32,6 +32,72 @@ CLS_CONF = float(os.getenv("CLS_CONFIDENCE", "0.0"))   # 0 = keep all prediction
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+NMS_IOU = float(os.getenv("NMS_IOU", "0.5"))                # NMS IoU threshold
+MIN_BOX_SIZE = int(os.getenv("MIN_BOX_SIZE", "10"))           # min box width / height
+CONF_THRESH = float(os.getenv("CONF_THRESHOLD", "0.5"))       # classification confidence
+
+
+# ─── Post-processing ────────────────────────────────────────────────────────
+def iou(bbox1, bbox2):
+    """IoU of two boxes in [x, y, w, h] format."""
+    x1, y1, w1, h1 = bbox1
+    x2, y2, w2, h2 = bbox2
+    # [x, y, w, h] → [x1, y1, x2, y2]
+    ax1, ay1, ax2, ay2 = x1, y1, x1 + w1, y1 + h1
+    bx1, by1, bx2, by2 = x2, y2, x2 + w2, y2 + h2
+
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+
+    inter = (ix2 - ix1) * (iy2 - iy1)
+    union = w1 * h1 + w2 * h2 - inter
+    return inter / union if union > 0 else 0.0
+
+
+def postprocess_detections(detections, img_w, img_h,
+                           min_size=10, conf_threshold=0.5, iou_threshold=0.5):
+    """Filter and deduplicate OCR detection results.
+
+    1. Remove boxes where width **or** height < *min_size*.
+    2. Remove boxes that extend beyond the image boundaries.
+    3. Remove boxes whose ``confidence`` < *conf_threshold* (skip if missing).
+    4. Greedy IoU-based NMS: keep the highest-confidence box, suppress
+       overlapping neighbours (IoU ≥ *iou_threshold*).
+
+    Returns the filtered list (sorted top-to-bottom, left-to-right).
+    """
+    # ① Size filter
+    dets = [d for d in detections
+            if d["bbox"][2] >= min_size and d["bbox"][3] >= min_size]
+
+    # ② Boundary filter
+    dets = [d for d in dets
+            if d["bbox"][0] >= 0 and d["bbox"][1] >= 0
+            and d["bbox"][0] + d["bbox"][2] <= img_w
+            and d["bbox"][1] + d["bbox"][3] <= img_h]
+
+    # ③ Confidence filter
+    dets = [d for d in dets
+            if d.get("confidence", 1.0) >= conf_threshold]
+
+    # ④ Greedy NMS (sort descending by confidence)
+    dets.sort(key=lambda d: d.get("confidence", 0), reverse=True)
+
+    kept = []
+    while dets:
+        best = dets.pop(0)
+        kept.append(best)
+        dets = [d for d in dets if iou(best["bbox"], d["bbox"]) < iou_threshold]
+
+    # Restore reading order: top-to-bottom, left-to-right
+    kept.sort(key=lambda d: (d["bbox"][1], d["bbox"][0]))
+    return kept
+
 
 # ─── ArcFace (inference-only) ───────────────────────────────────────────────
 class ArcFaceHead(nn.Module):
@@ -122,20 +188,20 @@ def infer_one(yolo, backbone, embedding, arcface, idx2char, image_path):
     # Step 1: YOLO detection
     results = yolo(img, conf=DET_CONF, verbose=False)
     boxes = results[0].boxes
-    detections = []
 
     if boxes is None or len(boxes) == 0:
-        return detections
+        return []
 
-    # Sort boxes top-to-bottom, left-to-right (for reading order)
-    xyxy = boxes.xyxy.cpu().tolist()
-    xyxy.sort(key=lambda b: (b[1], b[0]))
+    raw_detections = []
 
-    for x1, y1, x2, y2 in xyxy:
-        x1 = max(0, min(img_w - 1, int(round(x1))))
-        y1 = max(0, min(img_h - 1, int(round(y1))))
-        x2 = max(0, min(img_w, int(round(x2))))
-        y2 = max(0, min(img_h, int(round(y2))))
+    xyxy = boxes.xyxy.cpu()
+    confs = boxes.conf.cpu() if boxes.conf is not None else None
+
+    for i, (x1, y1, x2, y2) in enumerate(xyxy):
+        x1 = max(0, min(img_w - 1, int(round(x1.item()))))
+        y1 = max(0, min(img_h - 1, int(round(y1.item()))))
+        x2 = max(0, min(img_w, int(round(x2.item()))))
+        y2 = max(0, min(img_h, int(round(y2.item()))))
 
         if x2 - x1 <= 0 or y2 - y1 <= 0:
             continue
@@ -148,20 +214,34 @@ def infer_one(yolo, backbone, embedding, arcface, idx2char, image_path):
         feat = embedding(feat)
         logits = arcface(feat)                     # (1, num_classes)
 
-        scores = F.softmax(logits, dim=1)          # (1, num_classes)
+        scores = F.softmax(logits, dim=1)
         top_score, pred_idx = scores.max(dim=1)
-        score = top_score.item()
-
-        # Skip low-confidence predictions if threshold is set
-        if CLS_CONF > 0 and score < CLS_CONF:
-            continue
+        cls_conf = top_score.item()
 
         predicted_char = idx2char[pred_idx.item()] if pred_idx.item() < len(idx2char) else ""
 
-        detections.append({
+        # Combined confidence: geometric mean of detection & classification
+        det_conf = confs[i].item() if confs is not None else 1.0
+        combined_conf = (det_conf * cls_conf) ** 0.5
+
+        raw_detections.append({
             "bbox": [x1, y1, x2 - x1, y2 - y1],
             "text": predicted_char,
+            "confidence": round(combined_conf, 4),
         })
+
+    # Step 3: Post-process (size / boundary / confidence filter + NMS)
+    detections = postprocess_detections(
+        raw_detections,
+        img_w, img_h,
+        min_size=MIN_BOX_SIZE,
+        conf_threshold=CONF_THRESH,
+        iou_threshold=NMS_IOU,
+    )
+
+    # Strip confidence from output dict (keep output clean)
+    for d in detections:
+        d.pop("confidence", None)
 
     return detections
 
